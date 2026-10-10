@@ -67,32 +67,76 @@ const Attendance = () => {
 
   // 4. Save individual attendance records through a loop execution matching your backend
   const handleSaveAttendance = async () => {
-    setLoading(true);
-    try {
-      const submissionPromises = students.map(async (student) => {
-        const cellKey = `${student.std_id}_${selectedDate}`;
-        const selectedStatus = attendanceData[cellKey] || "Present"; // Default to Present if empty
+  // Sirf selected date ke records consider karo
+  const recordsToSave = students
+    .map((student) => {
+      const cellKey = `${student.std_id}_${selectedDate}`;
+      const status = attendanceData[cellKey];
 
-        // Body matches exactly your fixed backend MarkAttendance schema layout
-        const requestBody = {
-          std_id: student.std_id,
-          status: selectedStatus,
-          attendance_date: selectedDate
-        };
+      // Empty status ko save mat karo
+      if (!status) return null;
 
-        return markAttendance(student.std_id, requestBody);
-      });
+      // Sirf allowed statuses accept karo
+      if (!["Present", "Absent", "Leave"].includes(status)) {
+        return null;
+      }
 
-      // Execute all network requests in parallel
-      await Promise.all(submissionPromises);
-      alert("Attendance records updated successfully inside database!");
-    } catch (error) {
-      console.error("Error updates failed:", error);
-      alert(error.response?.data?.detail || "An error occurred while saving attendance.");
-    } finally {
-      setLoading(false);
+      return {
+        std_id: student.std_id,
+        status,
+        attendance_date: selectedDate,
+      };
+    })
+    .filter(Boolean);
+
+  console.log("Records being submitted:", recordsToSave);
+
+  // Agar koi status select nahi hua
+  if (recordsToSave.length === 0) {
+    alert("Please select at least one attendance status for the selected date.");
+    return;
+  }
+
+  setLoading(true);
+
+  try {
+    // Har student ki selected-date attendance save karo
+    const results = await Promise.allSettled(
+      recordsToSave.map((record) =>
+        markAttendance(record.std_id, record)
+      )
+    );
+
+    const successful = results.filter(
+      (result) => result.status === "fulfilled"
+    ).length;
+
+    const failed = results.length - successful;
+
+    if (failed === 0) {
+      alert(
+        `Attendance saved successfully for ${selectedDate}. Records saved: ${successful}.`
+      );
+    } else {
+      alert(
+        `Attendance partially saved for ${selectedDate}. Successful: ${successful}, Failed: ${failed}. Please check failed requests.`
+      );
+
+      console.error(
+        "Failed attendance requests:",
+        results.filter((result) => result.status === "rejected")
+      );
     }
-  };
+  } catch (error) {
+    console.error("Attendance save error:", error);
+    alert(
+      error.response?.data?.detail ||
+      "An error occurred while saving attendance."
+    );
+  } finally {
+    setLoading(false);
+  }
+};
 
   return (
     <div className="p-8 max-w-7xl mx-auto">

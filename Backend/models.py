@@ -98,7 +98,7 @@ class Attendance(Base):
     status = Column(Enum(attend), nullable=False)
     student_name = Column(String, nullable=False)
     attendance_date = Column(Date, nullable=False)
-    student_id = Column(String, ForeignKey("students.std_id"))
+    student_id = Column(String, ForeignKey("students.std_id"), nullable=False)
 
     student = relationship("Student", back_populates="attendance")
 

@@ -19,6 +19,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.colors import HexColor
 from reportlab.pdfbase.pdfmetrics import stringWidth
+from sqlalchemy.exc import IntegrityError
 
 
 router = APIRouter()
@@ -461,48 +462,104 @@ def get_feesRecord(std_id : str, db: Session=Depends(get_db)):
     
     return fees_records
 
-@router.post("/attendance/{std_id}", response_model=attendanceResponse)
+@router.post(
+    "/attendance/{std_id}",
+    response_model=attendanceResponse
+)
 def markattendance(
     std_id: str,
     attendance: MarkAttendance,
     db: Session = Depends(get_db)
 ):
-    # 1. Check student
-    student_exists = db.query(Student).filter(
-        Student.std_id == std_id
-    ).first()
+    try:
+        # 1. Check whether student exists
+        student = (
+            db.query(Student)
+            .filter(Student.std_id == std_id)
+            .first()
+        )
 
-    if not student_exists:
+        if student is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Student does not exist"
+            )
+
+        # 2. Get validated status from Pydantic
+        status = attendance.status
+
+        # Convert to the Python enum if necessary
+        if not isinstance(status, attend):
+            try:
+                status = attend(status)
+            except (ValueError, TypeError):
+                raise HTTPException(
+                    status_code=422,
+                    detail="Invalid attendance status"
+                )
+
+        # 3. Find existing attendance for this student and date
+        record = (
+            db.query(Attendance)
+            .filter(
+                Attendance.student_id == std_id,
+                Attendance.attendance_date == attendance.attendance_date
+            )
+            .first()
+        )
+
+        student_name = (
+            f"{student.firstname} {student.lastname}".strip()
+        )
+
+        if record is not None:
+            # 4. Update existing attendance
+            record.status = status
+            record.student_name = student_name
+
+        else:
+            # 5. Create new attendance
+            record = Attendance(
+                student_id=std_id,
+                student_name=student_name,
+                attendance_date=attendance.attendance_date,
+                status=status
+            )
+            db.add(record)
+
+        # 6. Commit changes
+        db.commit()
+        db.refresh(record)
+
+        return record
+
+    except HTTPException:
+        db.rollback()
+        raise
+
+    except IntegrityError:
+        db.rollback()
         raise HTTPException(
-            status_code=404,
-            detail="Student does not exist"
+            status_code=409,
+            detail=(
+                "Attendance record conflict. "
+                "Please retry the request."
+            )
         )
 
-    # 2. Check if attendance already exists for this student + date
-    attendance_record = db.query(Attendance).filter(
-        Attendance.student_id == std_id,
-        Attendance.attendance_date == attendance.attendance_date
-    ).first()
-
-    # 3. If exists → UPDATE
-    if attendance_record:
-        attendance_record.status = attendance.status
-
-    # 4. If doesn't exist → CREATE
-    else:
-        attendance_record = Attendance(
-            status=attendance.status,
-            student_name=f"{student_exists.firstname} {student_exists.lastname}",
-            attendance_date=attendance.attendance_date,
-            student_id=std_id,
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Database error while saving attendance."
         )
 
-        db.add(attendance_record)
-
-    db.commit()
-    db.refresh(attendance_record)
-
-    return attendance_record
+    except Exception:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Unexpected error while saving attendance."
+        )
 
 @router.get("/attendance/history/{std_id}", response_model=list[attendanceResponse])
 def get_attendance_history(std_id: str, db: Session = Depends(get_db)):
